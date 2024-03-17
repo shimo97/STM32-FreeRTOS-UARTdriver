@@ -3,7 +3,7 @@
 
 #include "FreeRTOS.h"
 #include "queue.h"
-#include <stdio.h>
+#include "main.h"
 
 /* Interrupt driver for UART usinf FreeRTOS queues */
 
