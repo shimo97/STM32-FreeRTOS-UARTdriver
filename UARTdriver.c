@@ -4,6 +4,7 @@ typedef struct DriverHandel_UART
 {
     volatile uint8_t _usageFlag;                  		//to flag that the strcture is valid (0 if not used)
     uint8_t _rxByte;                        			//where the HAL ISR will store the received byte
+    uint8_t _txByte;                        			//where the HAL ISR will store the sent byte
     UART_HandleTypeDef* _huartHandle;       			//UART handle
     IRQn_Type _irq;										//irq number of the uart
     QueueHandle_t	_rxQueueHandle;						//rx queue handle
@@ -15,7 +16,7 @@ typedef struct DriverHandel_UART
     fifo_policy _policyRX;								//rx buffer policy
 } DriverHandel_UART;
 
-DriverHandel_UART _driverHandle_UART[MAX_UART_HANDLE]; 	//handle structures array
+volatile DriverHandel_UART _driverHandle_UART[MAX_UART_HANDLE]; 	//handle structures array
 
 void initDriver_UART()
 {
@@ -86,10 +87,9 @@ uint32_t receiveDriver_UART(UART_HandleTypeDef* huartHandle, uint8_t* buff, uint
             //disable the IRQ
             //EDIT: removed part that disables interrupt to avoid losing packets if this function is
             //preempted, execution SHOULD be IRQ safe anyway
-        	//uint32_t irqState=NVIC_GetEnableIRQ(_driverHandle_UART[handleIndex]._irq);
         	//NVIC_DisableIRQ(_driverHandle_UART[handleIndex]._irq);
             HAL_UART_Receive_IT(huartHandle,&_driverHandle_UART[handleIndex]._rxByte,1);
-            //if(irqState) NVIC_EnableIRQ(_driverHandle_UART[handleIndex]._irq);
+            //NVIC_EnableIRQ(_driverHandle_UART[handleIndex]._irq);
 
         }
     }
@@ -112,15 +112,19 @@ uint32_t sendDriver_UART(UART_HandleTypeDef* huartHandle,uint8_t* buff,uint32_t 
 			}
 			//if no transmission ongoing and pipe is not empty, start transmission now
             //disable the IRQ
-        	uint32_t irqState=NVIC_GetEnableIRQ(_driverHandle_UART[handleIndex]._irq);
         	NVIC_DisableIRQ(_driverHandle_UART[handleIndex]._irq);
 
-			uint8_t txByte;
-			if(huartHandle->gState == HAL_UART_STATE_READY && xQueueReceive(_driverHandle_UART[handleIndex]._txQueueHandle,&txByte,0)){
-				HAL_UART_Transmit_IT(_driverHandle_UART[handleIndex]._huartHandle, &txByte, 1); //try restarting transmit if not ongoing
+			if(huartHandle->gState == HAL_UART_STATE_READY){
+				_driverHandle_UART[handleIndex]._txByte=buff[txNum];
+				HAL_UART_Transmit_IT(_driverHandle_UART[handleIndex]._huartHandle, &_driverHandle_UART[handleIndex]._txByte, 1); //try restarting transmit if not ongoing
+				txNum++;
+			}else{
+				if(xQueueSendToBack(_driverHandle_UART[handleIndex]._txQueueHandle,&buff[txNum],0)==pdTRUE){
+					txNum++;
+                }
 			}
 
-            if(irqState) NVIC_EnableIRQ(_driverHandle_UART[handleIndex]._irq);
+            NVIC_EnableIRQ(_driverHandle_UART[handleIndex]._irq);
 
 			return txNum;
 		}
@@ -202,9 +206,9 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart){
         //if it finds the handle in the structure
         if(_driverHandle_UART[handleIndex]._usageFlag == 1 && huart == _driverHandle_UART[handleIndex]._huartHandle)
         {
-			uint8_t txByte;
-			if(xQueueReceiveFromISR(_driverHandle_UART[handleIndex]._txQueueHandle,&txByte,NULL)==pdTRUE){
-				HAL_UART_Transmit_IT(_driverHandle_UART[handleIndex]._huartHandle, &txByte, 1);
+            
+			if(xQueueReceiveFromISR(_driverHandle_UART[handleIndex]._txQueueHandle,&_driverHandle_UART[handleIndex]._txByte,NULL)==pdTRUE){
+				HAL_UART_Transmit_IT(_driverHandle_UART[handleIndex]._huartHandle, &_driverHandle_UART[handleIndex]._txByte, 1);
 			}
 
             return;
